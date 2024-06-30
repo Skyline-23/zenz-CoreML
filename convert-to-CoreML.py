@@ -1,11 +1,11 @@
 import torch
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+from transformers import GPT2LMHeadModel, AutoTokenizer
 import coremltools as ct
 
 # 모델과 토크나이저 로드 / Load the model and tokenizer
 model_name = "Miwa-Keita/zenz-v1-checkpoints"
 model = GPT2LMHeadModel.from_pretrained(model_name).eval()
-tokenizer = GPT2Tokenizer.from_pretrained(model_name)
+tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # 입력 데이터 준비 / Prepare input data
 text = "Example sentence"
@@ -31,8 +31,8 @@ traced_model = torch.jit.trace(traced_model_wrapper, (inputs['input_ids'], input
 mlmodel = ct.convert(
     traced_model,
     inputs=[
-        ct.TensorType(name="input_ids", shape=inputs['input_ids'].shape),
-        ct.TensorType(name="attention_mask", shape=inputs['attention_mask'].shape)
+        ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(1, 256),)),  # 上限を256に設定
+        ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(1, 256),))  # 上限を256に設定
     ],
     minimum_deployment_target=ct.target.iOS15
 )
