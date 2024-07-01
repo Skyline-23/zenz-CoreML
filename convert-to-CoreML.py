@@ -12,7 +12,7 @@ text = "Example sentence"
 inputs = tokenizer(text, return_tensors="pt")
 
 # 토크나이저를 JSON 파일로 저장 / Save the tokenizer to a JSON file
-tokenizer.save_pretrained("./")
+tokenizer.save_pretrained("./tokenizer/")
 
 # 모델 추적 (Tracing) / Model tracing
 class TracedModelWrapper(torch.nn.Module):
