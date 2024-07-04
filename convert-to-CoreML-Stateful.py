@@ -5,7 +5,7 @@ import numpy as np
 
 # 모델과 토크나이저 로드 / Load the model and tokenizer
 model_name = "Miwa-Keita/zenz-v1-checkpoints"
-model = GPT2LMHeadModel.from_pretrained(model_name).eval()
+model = GPT2LMHeadModel.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # 입력 데이터 준비 / Prepare input data
@@ -16,26 +16,32 @@ inputs = tokenizer(text, return_tensors="pt")
 tokenizer.save_pretrained("./tokenizer/")
 
 # 모델 추적 (Tracing) / Model tracing
-class TracedModelWrapper(torch.nn.Module):
+class StatefulModel(torch.nn.Module):
     def __init__(self, model):
-        super(TracedModelWrapper, self).__init__()
-        self.register_buffer("keyCache", torch.tensor(np.array([0], dtype=np.float32)))
-        self.register_buffer("valueCache", torch.tensor(np.array([0], dtype=np.float32)))
+        super(StatefulModel, self).__init__()
         self.model = model
 
+        # 각 레이어마다 키와 값 캐시를 저장할 텐서를 만듭니다.
+        # TODO: - Set Tensor shape
+        self.register_buffer("keyCache", )
+        self.register_buffer("valueCache", )
+
     def forward(self, input_ids, attention_mask):
-        outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
+        outputs = self.model(input_ids, attention_mask, self.keyCache, self.valueCache)
         return outputs.logits
 
-traced_model_wrapper = TracedModelWrapper(model)
-traced_model = torch.jit.trace(traced_model_wrapper, (inputs['input_ids'], inputs['attention_mask']))
+torch_model = StatefulModel(model).eval()
+traced_model = torch.jit.trace(torch_model, [inputs['input_ids'], inputs['attention_mask']])
 
 # 모델을 CoreML로 변환 / Convert the model to CoreML
 mlmodel = ct.convert(
     traced_model,
-    inputs=[
+    inputs = [
         ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(1, 256))),  # 上限を256に設定
         ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(1, 256)))  # 上限を256に設定
+    ],
+    outputs = [
+        ct.TensorType(dtype=np.float32, name="logits")
     ],
     states = [
         ct.StateType(
