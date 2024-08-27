@@ -1,77 +1,178 @@
 import torch
-from transformers import GPT2LMHeadModel, AutoTokenizer
+from transformers.models.gpt2.modeling_gpt2 import GPT2LMHeadModel, GPT2Attention, GPT2_ATTENTION_CLASSES
+from transformers import AutoTokenizer
 import coremltools as ct
+from typing import Optional, Tuple
 import numpy as np
+from transformers.cache_utils import Cache
 
+class SliceUpdateKeyValueCache(Cache):
+    def __init__(
+        self,
+        shape: Tuple[int, ...],
+        device="cpu",
+        dtype=torch.float32,
+    ) -> None:
+        """KV cache of shape (#layers, batch_size, #kv_heads, context_size, head_dim)."""
+        super().__init__()
+        self.past_seen_tokens: int = 0
+        self.k_cache: torch.Tensor = torch.zeros(shape, dtype=dtype, device=device)
+        self.v_cache: torch.Tensor = torch.zeros(shape, dtype=dtype, device=device)
+
+    def update(
+        self,
+        k_state: torch.Tensor,
+        v_state: torch.Tensor,
+        layer_idx: int,
+        slice_indices: torch.LongTensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Update key/value cache tensors for slice [slice_indices[0], slice_indices[1]).
+        Return slice of key/value cache tensors from [0, slice_indices[1]).
+        """
+        if len(slice_indices) != 2:
+            raise ValueError(f"Expect tuple of integers [start, end), got {slice_indices=}.")
+        begin, end = slice_indices
+        self.k_cache[layer_idx, :, : k_state.shape[1], begin:end, :] = k_state
+        self.v_cache[layer_idx, :, : v_state.shape[1], begin:end, :] = v_state
+        k_cache: torch.Tensor = self.k_cache[layer_idx, :, :, :end, :]
+        v_cache: torch.Tensor = self.v_cache[layer_idx, :, :, :end, :]
+        return k_cache, v_cache
+
+    def get_seq_length(self, _: int | None = 0) -> int:
+        """Get the sequence length of the cache."""
+        return self.past_seen_tokens
+
+    def to_past_key_values(self):
+        """Convert the internal cache to a format expected by GPT2."""
+        return [
+            (self.k_cache[layer], self.v_cache[layer])
+            for layer in range(self.k_cache.size(0))
+        ]
+
+class SliceUpdateGPT2Attention(GPT2Attention):
+    def __init__(self, config, layer_idx: Optional[int] = None):
+        super().__init__(config=config, layer_idx=layer_idx)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None,
+        head_mask: Optional[torch.FloatTensor] = None,
+        use_cache: bool = False,
+        output_attentions: bool = False,
+    ):
+        query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
+        query = self._split_heads(query, self.num_heads, self.head_dim)
+        key = self._split_heads(key, self.num_heads, self.head_dim)
+        value = self._split_heads(value, self.num_heads, self.head_dim)
+
+        # Handle past key/value tensors
+        if layer_past is not None:
+            past_key, past_value = layer_past
+
+            # Ensure the sequence lengths are compatible
+            key = torch.cat((past_key, key), dim=-2)
+            value = torch.cat((past_value, value), dim=-2)
+
+        # Adjust attention mask to match the sequence length of key/value tensors
+        if attention_mask is not None:
+            attention_mask = attention_mask[:, :, :, -key.size(-2):]
+
+        present = (key, value) if use_cache else None
+
+        # Compute attention output
+        attn_output, _ = self._attn(query, key, value, attention_mask, head_mask)
+
+        attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
+        attn_output = self.c_proj(attn_output)
+
+        return attn_output, present
+    
 # Load the model and tokenizer
 model_name = "Miwa-Keita/zenz-v1-checkpoints"
-model = GPT2LMHeadModel.from_pretrained(model_name)
+GPT2_ATTENTION_CLASSES["sdpa"] = SliceUpdateGPT2Attention
+model = GPT2LMHeadModel.from_pretrained(model_name).eval()
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # Prepare input data
 text = "Example sentence"
 inputs = tokenizer(text, return_tensors="pt")
 
-# Save the tokenizer to a JSON file
-tokenizer.save_pretrained("./tokenizer/")
-
 # Model tracing
-class StatefulModel(torch.nn.Module):
-    def __init__(self, model):
-        super(StatefulModel, self).__init__()
+class TracedModelWrapper(torch.nn.Module):
+    def __init__(self, model, max_context_size: int = 256, batch_size: int = 1):
+        super(TracedModelWrapper, self).__init__()
+
         self.model = model
 
-        # Register keyCache and valueCache buffers with initial minimal dimensions
-        config = model.config
-        self.register_buffer('keyCache', torch.zeros(config.n_layer, config.n_head, 0, config.n_embd // config.n_head))
-        self.register_buffer('valueCache', torch.zeros(config.n_layer, config.n_head, 0, config.n_embd // config.n_head))
+        config = self.model.config
+        self.kv_cache_shape: Tuple[int, ...] = (
+            config.num_hidden_layers,
+            batch_size,
+            config.n_head,
+            max_context_size,
+            config.hidden_size // config.num_attention_heads,
+        )
+        self.kv_cache = SliceUpdateKeyValueCache(shape=self.kv_cache_shape)
+        self.register_buffer("keyCache", self.kv_cache.k_cache)
+        self.register_buffer("valueCache", self.kv_cache.v_cache)
 
     def forward(self, input_ids, attention_mask):
-        batch_size = input_ids.size(0)
-        seq_length = input_ids.size(1)
-        
-        if self.keyCache.size(2) == 0 and self.valueCache.size(2) == 0:
-            # Create empty caches with the correct dimensions
-            key_cache = torch.zeros(self.model.config.n_layer, batch_size, self.model.config.n_head, 0, self.model.config.n_embd // self.model.config.n_head)
-            value_cache = torch.zeros(self.model.config.n_layer, batch_size, self.model.config.n_head, 0, self.model.config.n_embd // self.model.config.n_head)
-        else:
-            # Concatenate new zeros with past_key_values to match the input sequence length
-            new_key_cache = torch.zeros(self.model.config.n_layer, batch_size, self.model.config.n_head, seq_length, self.model.config.n_embd // self.model.config.n_head)
-            new_value_cache = torch.zeros(self.model.config.n_layer, batch_size, self.model.config.n_head, seq_length, self.model.config.n_embd // self.model.config.n_head)
-            
-            key_cache = torch.cat((self.keyCache, new_key_cache), dim=-2)
-            value_cache = torch.cat((self.valueCache, new_value_cache), dim=-2)
+        # Compute past seen tokens used for updating key/value cache slices
+        self.kv_cache.past_seen_tokens = attention_mask.shape[-1] - input_ids.shape[-1]
+        past_key_values = self.kv_cache.to_past_key_values()
 
-        past_key_values = (key_cache, value_cache)
+        # Adjust attention mask to fit the current key/value cache size
+        extended_attention_mask = self._extend_attention_mask(attention_mask, past_key_values)
+
+        outputs = self.model(
+            input_ids,
+            attention_mask=extended_attention_mask,
+            past_key_values=past_key_values,
+            use_cache=True,
+        )
         
-        outputs = self.model(input_ids, past_key_values=past_key_values, attention_mask=attention_mask)
         return outputs.logits
 
-torch_model = StatefulModel(model).eval()
-traced_model = torch.jit.trace(torch_model, [inputs['input_ids'], inputs['attention_mask']])
+    def _extend_attention_mask(self, attention_mask, past_key_values):
+        """Adjust the attention mask to match the size of the key/value cache."""
+        if past_key_values is not None:
+            past_length = past_key_values[0][0].size(-2)
+            new_length = past_length + attention_mask.size(-1)
+            extended_attention_mask = torch.ones(
+                (attention_mask.size(0), 1, 1, new_length), dtype=attention_mask.dtype, device=attention_mask.device
+            )
+            extended_attention_mask[:, :, :, -attention_mask.size(-1):] = attention_mask
+        else:
+            extended_attention_mask = attention_mask
+        return extended_attention_mask
+
+# Create the traced model
+traced_model_wrapper = TracedModelWrapper(model)
+traced_model = torch.jit.trace(traced_model_wrapper, (inputs['input_ids'], inputs['attention_mask']))
 
 # Convert the model to CoreML
 mlmodel = ct.convert(
     traced_model,
-    inputs = [
+    inputs=[
         ct.TensorType(name="input_ids", shape=(1, ct.RangeDim(1, 256))),  # 上限を256に設定
         ct.TensorType(name="attention_mask", shape=(1, ct.RangeDim(1, 256)))  # 上限を256に設定
     ],
-    outputs = [
-        ct.TensorType(dtype=np.float32, name="logits")
+    outputs=[
+        ct.TensorType(dtype=np.float32, name="output")
     ],
     states = [
         ct.StateType(
             wrapped_type=ct.TensorType(
-                shape=(model.config.n_layer, model.config.n_head, 0, model.config.n_embd // model.config.n_head),
-                dtype=np.float16,
+                shape=traced_model_wrapper.kv_cache_shape
             ),
             name="keyCache",
         ),
         ct.StateType(
             wrapped_type=ct.TensorType(
-                shape=(model.config.n_layer, model.config.n_head, 0, model.config.n_embd // model.config.n_head),
-                dtype=np.float16,
+                shape=traced_model_wrapper.kv_cache_shape
             ),
             name="valueCache",
         ),
@@ -81,6 +182,4 @@ mlmodel = ct.convert(
 
 # Save the converted model
 mlmodel.save("zenz_v1_cached.mlpackage")
-
 print("Model successfully converted and saved as: zenz_v1_cached.mlpackage")
-print("Tokenizer successfully saved as: tokenizer_config.json and vocab.json")
