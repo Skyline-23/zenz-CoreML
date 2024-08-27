@@ -5,91 +5,71 @@ import coremltools as ct
 from typing import Optional, Tuple
 import numpy as np
 from transformers.cache_utils import Cache
+import os
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 class SliceUpdateKeyValueCache(Cache):
-    def __init__(
-        self,
-        shape: Tuple[int, ...],
-        device="cpu",
-        dtype=torch.float32,
-    ) -> None:
+    def __init__(self, shape: Tuple[int, ...], device="cpu", dtype=torch.float32) -> None:
         """KV cache of shape (#layers, batch_size, #kv_heads, context_size, head_dim)."""
         super().__init__()
         self.past_seen_tokens: int = 0
         self.k_cache: torch.Tensor = torch.zeros(shape, dtype=dtype, device=device)
         self.v_cache: torch.Tensor = torch.zeros(shape, dtype=dtype, device=device)
 
-    def update(
-        self,
-        k_state: torch.Tensor,
-        v_state: torch.Tensor,
-        layer_idx: int,
-        slice_indices: torch.LongTensor,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Update key/value cache tensors for slice [slice_indices[0], slice_indices[1]).
-        Return slice of key/value cache tensors from [0, slice_indices[1]).
-        """
+    def update(self, k_state: torch.Tensor, v_state: torch.Tensor, layer_idx: int, slice_indices: torch.LongTensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Update key/value cache tensors for slice [slice_indices[0], slice_indices[1])."""
         if len(slice_indices) != 2:
             raise ValueError(f"Expect tuple of integers [start, end), got {slice_indices=}.")
         begin, end = slice_indices
         self.k_cache[layer_idx, :, : k_state.shape[1], begin:end, :] = k_state
         self.v_cache[layer_idx, :, : v_state.shape[1], begin:end, :] = v_state
-        k_cache: torch.Tensor = self.k_cache[layer_idx, :, :, :end, :]
-        v_cache: torch.Tensor = self.v_cache[layer_idx, :, :, :end, :]
-        return k_cache, v_cache
+        return self.k_cache[layer_idx, :, :, :end, :], self.v_cache[layer_idx, :, :, :end, :]
 
-    def get_seq_length(self, _: int | None = 0) -> int:
+    def get_seq_length(self, _: int = 0) -> int:
         """Get the sequence length of the cache."""
         return self.past_seen_tokens
 
     def to_past_key_values(self):
         """Convert the internal cache to a format expected by GPT2."""
-        return [
-            (self.k_cache[layer], self.v_cache[layer])
-            for layer in range(self.k_cache.size(0))
-        ]
+        return [(self.k_cache[layer], self.v_cache[layer]) for layer in range(self.k_cache.size(0))]
 
 class SliceUpdateGPT2Attention(GPT2Attention):
     def __init__(self, config, layer_idx: Optional[int] = None):
         super().__init__(config=config, layer_idx=layer_idx)
 
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-        attention_mask: Optional[torch.FloatTensor] = None,
-        head_mask: Optional[torch.FloatTensor] = None,
-        use_cache: bool = False,
-        output_attentions: bool = False,
-    ):
+    @torch.no_grad()
+    def forward(self, hidden_states: torch.Tensor, 
+                layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+                attention_mask: Optional[torch.FloatTensor] = None, 
+                head_mask: Optional[torch.FloatTensor] = None,
+                use_cache: bool = False,
+                output_attentions: bool = False) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        # Compute query, key, and value tensors
         query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
         query = self._split_heads(query, self.num_heads, self.head_dim)
         key = self._split_heads(key, self.num_heads, self.head_dim)
         value = self._split_heads(value, self.num_heads, self.head_dim)
 
-        # Handle past key/value tensors
+        # Handle past key/value tensors using tensor-based condition
         if layer_past is not None:
             past_key, past_value = layer_past
+            if past_key.size(-2) > 0:
+                key = torch.cat([past_key, key], dim=-2)
+                value = torch.cat([past_value, value], dim=-2)
 
-            # Ensure the sequence lengths are compatible
-            key = torch.cat((past_key, key), dim=-2)
-            value = torch.cat((past_value, value), dim=-2)
-
-        # Adjust attention mask to match the sequence length of key/value tensors
+        # Optimize attention mask handling
         if attention_mask is not None:
             attention_mask = attention_mask[:, :, :, -key.size(-2):]
 
-        present = (key, value) if use_cache else None
-
-        # Compute attention output
+        # Calculate attention output
         attn_output, _ = self._attn(query, key, value, attention_mask, head_mask)
-
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
         attn_output = self.c_proj(attn_output)
 
+        # Return the updated cache if use_cache is True
+        present = (key, value) if use_cache else None
         return attn_output, present
-    
 # Load the model and tokenizer
 model_name = "Miwa-Keita/zenz-v1-checkpoints"
 GPT2_ATTENTION_CLASSES["sdpa"] = SliceUpdateGPT2Attention
@@ -101,12 +81,10 @@ text = "Example sentence"
 inputs = tokenizer(text, return_tensors="pt")
 
 # Model tracing
-class TracedModelWrapper(torch.nn.Module):
+class StatefulZenz(torch.nn.Module):
     def __init__(self, model, max_context_size: int = 256, batch_size: int = 1):
-        super(TracedModelWrapper, self).__init__()
-
+        super(StatefulZenz, self).__init__()
         self.model = model
-
         config = self.model.config
         self.kv_cache_shape: Tuple[int, ...] = (
             config.num_hidden_layers,
@@ -119,21 +97,15 @@ class TracedModelWrapper(torch.nn.Module):
         self.register_buffer("keyCache", self.kv_cache.k_cache)
         self.register_buffer("valueCache", self.kv_cache.v_cache)
 
+    @torch.no_grad()
     def forward(self, input_ids, attention_mask):
-        # Compute past seen tokens used for updating key/value cache slices
         self.kv_cache.past_seen_tokens = attention_mask.shape[-1] - input_ids.shape[-1]
         past_key_values = self.kv_cache.to_past_key_values()
 
-        # Adjust attention mask to fit the current key/value cache size
-        extended_attention_mask = self._extend_attention_mask(attention_mask, past_key_values)
+        # Reintroduce the attention mask extension logic
+        attention_mask = self._extend_attention_mask(attention_mask, past_key_values)
 
-        outputs = self.model(
-            input_ids,
-            attention_mask=extended_attention_mask,
-            past_key_values=past_key_values,
-            use_cache=True,
-        )
-        
+        outputs = self.model(input_ids, attention_mask=attention_mask, past_key_values=past_key_values, use_cache=True)
         return outputs.logits
 
     def _extend_attention_mask(self, attention_mask, past_key_values):
@@ -150,8 +122,8 @@ class TracedModelWrapper(torch.nn.Module):
         return extended_attention_mask
 
 # Create the traced model
-traced_model_wrapper = TracedModelWrapper(model)
-traced_model = torch.jit.trace(traced_model_wrapper, (inputs['input_ids'], inputs['attention_mask']))
+stateful_zenz = StatefulZenz(model).eval()
+traced_model = torch.jit.trace(stateful_zenz, (inputs['input_ids'], inputs['attention_mask']))
 
 # Convert the model to CoreML
 mlmodel = ct.convert(
@@ -163,16 +135,16 @@ mlmodel = ct.convert(
     outputs=[
         ct.TensorType(dtype=np.float32, name="output")
     ],
-    states = [
+    states=[
         ct.StateType(
             wrapped_type=ct.TensorType(
-                shape=traced_model_wrapper.kv_cache_shape
+                shape=stateful_zenz.kv_cache_shape
             ),
             name="keyCache",
         ),
         ct.StateType(
             wrapped_type=ct.TensorType(
-                shape=traced_model_wrapper.kv_cache_shape
+                shape=stateful_zenz.kv_cache_shape
             ),
             name="valueCache",
         ),

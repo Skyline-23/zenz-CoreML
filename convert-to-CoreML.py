@@ -1,10 +1,12 @@
 import torch
 from transformers import GPT2LMHeadModel, AutoTokenizer
 import coremltools as ct
+import os
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # 모델과 토크나이저 로드 / Load the model and tokenizer
 model_name = "Miwa-Keita/zenz-v1-checkpoints"
-model = GPT2LMHeadModel.from_pretrained(model_name).eval()
+model = GPT2LMHeadModel.from_pretrained(model_name)
 tokenizer = AutoTokenizer.from_pretrained(model_name)
 
 # 입력 데이터 준비 / Prepare input data
@@ -24,7 +26,7 @@ class TracedModelWrapper(torch.nn.Module):
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
         return outputs.logits
 
-traced_model_wrapper = TracedModelWrapper(model)
+traced_model_wrapper = TracedModelWrapper(model).eval()
 traced_model = torch.jit.trace(traced_model_wrapper, (inputs['input_ids'], inputs['attention_mask']))
 
 # 모델을 CoreML로 변환 / Convert the model to CoreML
