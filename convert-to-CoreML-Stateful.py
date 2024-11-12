@@ -50,11 +50,16 @@ class SliceUpdateGPT2Attention(GPT2Attention):
         super().__init__(config=config, layer_idx=layer_idx)
 
     @torch.no_grad()
-    def forward(self, hidden_states: torch.Tensor, 
-                layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
-                attention_mask: Optional[torch.FloatTensor] = None, 
-                head_mask: Optional[torch.FloatTensor] = None,
-                use_cache: bool = False) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+    def forward(
+        self,
+        hidden_states: torch.Tensor, 
+        layer_past: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        attention_mask: Optional[torch.FloatTensor] = None, 
+        head_mask: Optional[torch.FloatTensor] = None,
+        use_cache: bool = False,
+        output_attentions: Optional[bool] = False,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        # 기존 코드 유지
         query, key, value = self.c_attn(hidden_states).split(self.split_size, dim=2)
         query = self._split_heads(query, self.num_heads, self.head_dim)
         key = self._split_heads(key, self.num_heads, self.head_dim)
@@ -69,19 +74,24 @@ class SliceUpdateGPT2Attention(GPT2Attention):
         if attention_mask is not None:
             attention_mask = attention_mask[:, :, :, -key.size(-2):]
 
-        attn_output, _ = self._attn(query, key, value, attention_mask, head_mask)
+        # 어텐션 가중치를 반환받도록 수정
+        attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
         attn_output = self.c_proj(attn_output)
 
         present = (key, value) if use_cache else None
-        return attn_output, present
+
+        if output_attentions:
+            return attn_output, present, attn_weights
+        else:
+            return attn_output, present
 
 class StatefulZenz(torch.nn.Module):
     def __init__(self, model, max_context_size: int = 256, batch_size: int = 1):
         super(StatefulZenz, self).__init__()
 
         GPT2_ATTENTION_CLASSES["sdpa"] = SliceUpdateGPT2Attention
-        
+
         self.model = model
         config = self.model.config
         self.kv_cache_shape: Tuple[int, ...] = (
@@ -116,7 +126,8 @@ class StatefulZenz(torch.nn.Module):
             input_ids, 
             attention_mask=self._extend_attention_mask(attention_mask=attention_mask, past_key_values=past_key_values), 
             past_key_values=past_key_values, 
-            use_cache=True
+            use_cache=True,
+            output_attentions=True  # 어텐션 가중치를 반환받도록 설정
         )
         return outputs.logits
 
@@ -178,7 +189,6 @@ def convert_model(model_name: str, output_path: str):
                 name="valueCache",
             ),
         ],
-        skip_model_load=True,
         minimum_deployment_target=ct.target.iOS18,
     )
 
