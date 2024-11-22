@@ -75,6 +75,7 @@ class SliceUpdateGPT2Attention(GPT2Attention):
             attention_mask = attention_mask[:, :, :, -key.size(-2):]
 
         # 어텐션 가중치를 반환받도록 수정
+        attention_mask = None
         attn_output, attn_weights = self._attn(query, key, value, attention_mask, head_mask)
         attn_output = self._merge_heads(attn_output, self.num_heads, self.head_dim)
         attn_output = self.c_proj(attn_output)
@@ -190,6 +191,7 @@ def convert_model(model_name: str, output_path: str):
             ),
         ],
         minimum_deployment_target=ct.target.iOS18,
+        compute_units=ct.ComputeUnit.CPU_AND_GPU,
     )
 
     mlmodel.save(output_path)
