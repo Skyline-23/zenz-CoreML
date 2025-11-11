@@ -91,85 +91,14 @@ gpt2_mod.create_causal_mask = _patched_create_causal_mask
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# KR: 변환에 사용할 Hugging Face 모델 이름과, Core ML에서 사용할 최대 컨텍스트 길이 / 배치 크기 설정.
+# JP: 変換に使用する Hugging Face モデル名と、Core ML で使う最大コンテキスト長 / バッチサイズの設定。
+# EN: Name of the Hugging Face model to convert, and max context length / batch size for the Core ML export.
 MODEL_NAME = "Miwa-Keita/zenz-v1-checkpoints"
 MAX_CONTEXT_SIZE = 256
 BATCH_SIZE = 1
 
 
-class SliceUpdateKeyValueCache:
-    """
-    KV cache of shape:
-      (num_layers, batch_size, num_heads, context_size, head_dim)
-
-    KR: Core ML state(keyCache / valueCache)와 동일한 모양의 KV 캐시를 PyTorch 쪽에서 관리하기 위한
-        헬퍼 클래스이다. Hugging Face GPT-2가 내보내는 (batch, head, seq_len, dim) 형식의 K/V 텐서를
-        레이어별로 모아서 위의 5차원 텐서에 저장한다.
-
-    JP: Core ML の state（keyCache / valueCache）と同じ形状の KV キャッシュを、PyTorch 側で管理する
-        ためのヘルパークラス。Hugging Face GPT-2 が返す (batch, head, seq_len, dim) 形式の K/V テンソルを
-        レイヤごとに集約し、上記 5 次元テンソルに格納する。
-
-    EN: Helper class that keeps a KV cache with the same shape as the Core ML state
-        tensors (keyCache / valueCache). It aggregates per-layer K/V tensors from
-        Hugging Face GPT-2 (shape: (batch, head, seq_len, dim)) into a single 5D tensor.
-    """
-
-    def __init__(
-        self,
-        shape: Tuple[int, ...],
-        device: str = "cpu",
-        dtype: torch.dtype = torch.float32,
-    ) -> None:
-        # 현재 단계에서는 transformers.Cache 기능을 직접 사용하지 않고,
-        # Core ML state에 맞는 KV 텐서를 관리하는 용도로만 사용한다.
-        self.past_seen_tokens: int = 0
-        self.k_cache: torch.Tensor = torch.zeros(shape, dtype=dtype, device=device)
-        self.v_cache: torch.Tensor = torch.zeros(shape, dtype=dtype, device=device)
-
-    def update(
-        self,
-        k_state: torch.Tensor,
-        v_state: torch.Tensor,
-        layer_idx: int,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Update key/value cache tensors for a given layer using full-sequence KV.
-
-        KR: Hugging Face GPT-2가 반환한 단일 레이어의 K/V 텐서
-            (batch, num_heads, seq_len, head_dim)를 받아서, 내부 캐시 텐서
-            (num_layers, batch, num_heads, context_size, head_dim)에 써 넣는다.
-
-        JP: Hugging Face GPT-2 が返す単一レイヤの K/V テンソル
-            (batch, num_heads, seq_len, head_dim) を受け取り、内部のキャッシュ
-            (num_layers, batch, num_heads, context_size, head_dim) に書き込む。
-
-        EN: Takes a single layer's K/V tensors from Hugging Face GPT-2
-            (batch, num_heads, seq_len, head_dim) and writes them into the
-            internal cache tensor (num_layers, batch, num_heads, context_size, head_dim).
-        """
-        bsz, num_heads, seq_len, head_dim = k_state.shape
-        max_len = self.k_cache.shape[3]
-
-        # KR/JP/EN: 시퀀스 길이가 context_size를 넘을 경우 잘라서 저장한다.
-        #           If seq_len exceeds context_size, truncate to max_len.
-        write_len = min(seq_len, max_len)
-
-        # k_cache[layer, batch, head, pos, dim]
-        # k_state[batch, head, seq_len, dim]
-        self.k_cache[layer_idx, :bsz, :num_heads, :write_len, :] = k_state[:, :, :write_len, :]
-        self.v_cache[layer_idx, :bsz, :num_heads, :write_len, :] = v_state[:, :, :write_len, :]
-
-        # 반환값은 현재 레이어의 유효 KV 부분
-        k_cache = self.k_cache[layer_idx, :, :, :write_len, :]
-        v_cache = self.v_cache[layer_idx, :, :, :write_len, :]
-
-        # past_seen_tokens는 전체 시퀀스 길이로 갱신 (모든 레이어가 동일한 길이를 공유한다고 가정)
-        self.past_seen_tokens = write_len
-
-        return k_cache, v_cache
-
-    def get_seq_length(self, _: int | None = 0) -> int:
-        return self.past_seen_tokens
 
 
 class StatefulGPT2ForCausalLM(torch.nn.Module):
@@ -177,20 +106,31 @@ class StatefulGPT2ForCausalLM(torch.nn.Module):
     Mistral의 StatefulMistralForCausalLM 구조를 GPT-2에 맞게 단순화한 버전.
 
     KR:
-    - Core ML state (keyCache / valueCache)를 Hugging Face GPT-2의 past_key_values와
+    - Core ML state (keyCache / valueCache / pastLen)를 Hugging Face GPT-2의 past_key_values와
       양방향으로 연결해서 토큰 단위 KV 캐시를 유지한다.
-    - iOS 측에서는 keyCache / valueCache를 state로 넘기고, PyTorch 측에서는
-      past_key_values로 다시 조립하여 GPT-2에 전달한다.
+    - 단, 더 이상 register_buffer로 내부에 숨기지 않고,
+      forward(input_ids, attention_mask, keyCache, valueCache, pastLen) → (logits, newKeyCache, newValueCache, newPastLen)
+      형태의 “순수 state 머신”으로 설계했다.
+      Core ML이 이 입력/출력 시그니처를 그대로 stateful 모델로 매핑할 수 있게 하기 위함이다.
 
     JP:
     - Mistral の StatefulMistralForCausalLM の構造を GPT-2 向けに簡略化したクラス。
-    - Core ML 側の state（keyCache / valueCache）と、Hugging Face GPT-2 の past_key_values
+    - Core ML 側の state（keyCache / valueCache / pastLen）と、Hugging Face GPT-2 の past_key_values
       を相互に変換しながら、トークン単位で KV キャッシュを維持する。
+    - ただし、state はもはや register_buffer には保持せず、
+      forward(input_ids, attention_mask, keyCache, valueCache, pastLen) → (logits, newKeyCache, newValueCache, newPastLen)
+      という純粋なステートマシンとして実装する。
+      これにより、Core ML が状態遷移を正しく理解しやすくなる。
 
     EN:
     - Simplified GPT-2 counterpart of Mistral's StatefulMistralForCausalLM.
-    - Bridges Core ML states (keyCache / valueCache) with Hugging Face GPT-2
+    - Bridges Core ML states (keyCache / valueCache / pastLen) with Hugging Face GPT-2
       past_key_values, maintaining a token-wise KV cache for incremental decoding.
+    - Unlike the previous version, the state is no longer hidden as register_buffers.
+      Instead, the module is a pure state machine:
+      forward(input_ids, attention_mask, keyCache, valueCache, pastLen)
+        → (logits, newKeyCache, newValueCache, newPastLen),
+      which Core ML can more reliably convert into a stateful mlprogram.
     """
 
     def __init__(self, model_name: str, max_context_size: int = MAX_CONTEXT_SIZE, batch_size: int = BATCH_SIZE):
@@ -220,6 +160,15 @@ class StatefulGPT2ForCausalLM(torch.nn.Module):
         self.num_heads = config.n_head
         self.head_dim = config.n_embd // config.n_head
 
+        self.max_context_size = max_context_size
+        self.batch_size = batch_size
+
+        # KR: Core ML state로 유지할 KV 캐시의 전체 shape 정의
+        #     (레이어 수, 배치 크기, 헤드 수, 시퀀스 길이, 헤드 차원).
+        # JP: Core ML の state として保持する KV キャッシュの shape を定義。
+        #     （レイヤー数, バッチサイズ, ヘッド数, シーケンス長, ヘッド次元）
+        # EN: Shape of the KV cache tensor that will be stored as Core ML state:
+        #     (num_layers, batch_size, num_heads, seq_len, head_dim).
         self.kv_cache_shape: Tuple[int, ...] = (
             self.num_layers,
             batch_size,
@@ -228,55 +177,38 @@ class StatefulGPT2ForCausalLM(torch.nn.Module):
             self.head_dim,
         )
 
-        # KV cache object (Python level)
-        self.kv_cache = SliceUpdateKeyValueCache(shape=self.kv_cache_shape)
-
-        # Core ML state용 buffer (이름 중요)
-        self.register_buffer("keyCache", self.kv_cache.k_cache)
-        self.register_buffer("valueCache", self.kv_cache.v_cache)
+        # KR: Core ML에서 state로 유지될 버퍼들 (KV 캐시 + 현재까지 본 토큰 길이).
+        # JP: Core ML の state として保持されるバッファ（KV キャッシュ + これまでのトークン長）。
+        # EN: Buffers that Core ML will treat as state (KV cache + length of tokens seen so far).
+        self.register_buffer("keyCache", torch.zeros(self.kv_cache_shape, dtype=torch.float16))
+        self.register_buffer("valueCache", torch.zeros(self.kv_cache_shape, dtype=torch.float16))
+        self.register_buffer("pastLen", torch.zeros((1,), dtype=torch.float16))
 
     @torch.no_grad()
-    def forward(
-        self,
-        input_ids: torch.LongTensor,
-        attention_mask: torch.Tensor,
-    ) -> torch.Tensor:
+    def forward(self, input_ids: torch.LongTensor, attention_mask: torch.Tensor) -> torch.Tensor:
         """
-        GPT-2의 past_key_values를 Core ML state(keyCache / valueCache)와 연결한 stateful forward.
-
-        - self.kv_cache.past_seen_tokens: 현재까지 누적된 토큰 수
-        - keyCache / valueCache: (num_layers, batch, num_heads, context_size, head_dim)
-        - Hugging Face GPT-2 past_key_values:
-          튜플 길이 num_layers, 각 요소는 (k, v) with shape (batch, num_heads, seq_len, head_dim)
+        Stateful GPT-2 forward using register_buffer-based internal state.
+        Core ML states are exposed via buffers, not as explicit inputs.
         """
+        batch_size, cur_len = input_ids.shape
+        past_len = int(self.pastLen[0].item())
+        max_len = self.max_context_size
 
-        # KR: Core ML에서 넘어온 state(keyCache / valueCache)를 past_key_values로 재구성한 뒤,
-        #     GPT-2를 한 번 호출하고, 그 결과의 past_key_values를 다시 state에 반영한다.
-        # JP: Core ML から渡された state（keyCache / valueCache）を past_key_values に組み立て直し、
-        #     GPT-2 を 1 ステップ実行してから、新しい past_key_values を state に書き戻す。
-        # EN: Rebuild past_key_values from the Core ML states, run a single GPT-2 step,
-        #     then write back the updated past_key_values into the Core ML states.
-
-        batch_size, current_len = input_ids.shape
-
-        # KR: 과거 토큰이 존재하는 경우, 레이어별 K/V를 모아서 HF 포맷의 past_key_values 튜플을 만든다.
-        # JP: すでに過去のトークンがある場合、レイヤごとの K/V を集めて HF 形式の past_key_values を組み立てる。
-        # EN: If there are previous tokens, collect per-layer K/V tensors to build
-        #     the Hugging Face-style past_key_values tuple.
-        past_len = self.kv_cache.get_seq_length()
+        # KR: Core ML state로부터 Hugging Face가 기대하는 past_key_values 형태로 복원.
+        # JP: Core ML の state から、Hugging Face GPT-2 が使う past_key_values 形式に復元する。
+        # EN: Rebuild Hugging Face-style past_key_values from the Core ML state buffers.
         past_key_values = None
         if past_len > 0:
             pkv = []
             for layer_idx in range(self.num_layers):
-                # (batch, head, past_len, dim)
-                k_past = self.kv_cache.k_cache[layer_idx, :batch_size, :, :past_len, :]
-                v_past = self.kv_cache.v_cache[layer_idx, :batch_size, :, :past_len, :]
+                k_past = self.keyCache[layer_idx, :batch_size, :, :past_len, :].to(self.model.dtype)
+                v_past = self.valueCache[layer_idx, :batch_size, :, :past_len, :].to(self.model.dtype)
                 pkv.append((k_past, v_past))
             past_key_values = tuple(pkv)
 
-        # KR/JP/EN: patched causal mask + eager attention 설정을 사용하여 한 스텝 forward.
         outputs = self.model(
             input_ids=input_ids,
+            attention_mask=attention_mask,
             past_key_values=past_key_values,
             use_cache=True,
         )
@@ -284,26 +216,23 @@ class StatefulGPT2ForCausalLM(torch.nn.Module):
         logits = outputs.logits
         present_key_values = outputs.past_key_values
 
-        # KR: GPT-2가 반환한 현재까지의 전체 K/V(past + current)를 다시 state 텐서에 반영한다.
-        # JP: GPT-2 が返した（過去 + 現在）の K/V 全体を state テンソルに書き戻す。
-        # EN: Write back the full K/V tensors (past + current) returned by GPT-2 into the state.
-        if present_key_values is not None:
-            # 모든 레이어의 시퀀스 길이가 동일하다고 가정
+        # KR: 새로 계산된 KV를 잘라서(max_context_size 기준) 내부 state 버퍼에 다시 저장한다.
+        # JP: 新しく計算された KV を max_context_size に合わせてスライスし、内部 state バッファに書き戻す。
+        # EN: Slice the newly computed KV to fit max_context_size and write it back into the state buffers.
+        if present_key_values is not None and len(present_key_values) > 0:
             total_seq_len = present_key_values[0][0].shape[2]
+            new_total_len = min(total_seq_len, max_len)
+            start = total_seq_len - new_total_len
 
-            for layer_idx, (k_layer, v_layer) in enumerate(present_key_values):
-                self.kv_cache.update(
-                    k_state=k_layer,
-                    v_state=v_layer,
-                    layer_idx=layer_idx,
-                )
+            for layer_idx, (k_full, v_full) in enumerate(present_key_values):
+                k_slice = k_full[:, :, start:, :].to(torch.float16)
+                v_slice = v_full[:, :, start:, :].to(torch.float16)
+                self.keyCache[layer_idx, :batch_size, :, :new_total_len, :] = k_slice
+                self.valueCache[layer_idx, :batch_size, :, :new_total_len, :] = v_slice
 
-        # 4) Core ML에서 state를 "사용"하고 있다고 인식시키기 위한 더미 참조
-        key_sample = self.keyCache.reshape(-1)[0].to(logits.dtype)
-        value_sample = self.valueCache.reshape(-1)[0].to(logits.dtype)
-        dummy = (key_sample + value_sample) * 0.0
+            self.pastLen[0] = float(new_total_len)
 
-        return logits + dummy
+        return logits
 
 
 def convert_model(model_name: str, output_path: str) -> None:
@@ -317,53 +246,71 @@ def convert_model(model_name: str, output_path: str) -> None:
         batch_size=BATCH_SIZE,
     ).eval()
 
+    kv_cache_shape = torch_model.kv_cache_shape
+
     # trace용 예제 입력 (길이는 아무거나, 상한은 MAX_CONTEXT_SIZE)
     example_input_ids = torch.zeros((BATCH_SIZE, 4), dtype=torch.long)
     example_attention_mask = torch.ones((BATCH_SIZE, 4), dtype=torch.long)
 
-    # TorchScript trace (masking_utils 고차 연산 대신, 우리가 패치한 causal mask 사용)
+    # Only trace with true inputs (no explicit state tensors)
     traced_model = torch.jit.trace(
         torch_model,
         (example_input_ids, example_attention_mask),
         check_trace=False,
     )
 
-    kv_cache_shape = torch_model.kv_cache_shape
-
     # Core ML 입력/출력/상태 스펙 (Mistral export.py 스타일)
     query_length = ct.RangeDim(lower_bound=1, upper_bound=MAX_CONTEXT_SIZE, default=1)
 
+    input_ids_type = ct.TensorType(
+        shape=(BATCH_SIZE, query_length),
+        dtype=np.int32,
+        name="input_ids",
+    )
+    attention_mask_type = ct.TensorType(
+        shape=(BATCH_SIZE, query_length),
+        dtype=np.int32,
+        name="attention_mask",
+    )
+
     inputs: List[ct.TensorType] = [
-        ct.TensorType(
-            shape=(BATCH_SIZE, query_length),
-            dtype=np.int32,
-            name="input_ids",
-        ),
-        ct.TensorType(
-            shape=(BATCH_SIZE, query_length),
-            dtype=np.int32,
-            name="attention_mask",
-        ),
+        input_ids_type,
+        attention_mask_type,
     ]
 
     outputs: List[ct.TensorType] = [
         ct.TensorType(dtype=np.float16, name="logits"),
     ]
 
-    # KR: Core ML 모델이 유지할 state 정의. keyCache / valueCache는 PyTorch 쪽의
-    #     SliceUpdateKeyValueCache.k_cache / v_cache와 모양이 정확히 일치해야 한다.
-    # JP: Core ML モデルが保持する state の定義。keyCache / valueCache の形状は、PyTorch 側の
-    #     SliceUpdateKeyValueCache.k_cache / v_cache と完全に一致している必要がある。
-    # EN: Definition of the Core ML model states. keyCache / valueCache must have exactly the
-    #     same shape as SliceUpdateKeyValueCache.k_cache / v_cache on the PyTorch side.
+    # Define anonymous TensorTypes for state tensors, use in ct.StateType
+    keycache_state_type = ct.TensorType(
+        shape=kv_cache_shape,
+        dtype=np.float16,
+    )
+    valuecache_state_type = ct.TensorType(
+        shape=kv_cache_shape,
+        dtype=np.float16,
+    )
+    pastlen_state_type = ct.TensorType(
+        shape=(1,),
+        dtype=np.float16,
+    )
+
+    # KR: PyTorch 쪽 register_buffer 이름과 동일한 Core ML state를 정의한다.
+    # JP: PyTorch 側の register_buffer 名と対応する Core ML の state を定義する。
+    # EN: Define Core ML states that correspond to the PyTorch register_buffer names.
     states: List[ct.StateType] = [
         ct.StateType(
-            wrapped_type=ct.TensorType(shape=kv_cache_shape, dtype=np.float16),
+            wrapped_type=keycache_state_type,
             name="keyCache",
         ),
         ct.StateType(
-            wrapped_type=ct.TensorType(shape=kv_cache_shape, dtype=np.float16),
+            wrapped_type=valuecache_state_type,
             name="valueCache",
+        ),
+        ct.StateType(
+            wrapped_type=pastlen_state_type,
+            name="pastLen",
         ),
     ]
 
@@ -378,33 +325,6 @@ def convert_model(model_name: str, output_path: str) -> None:
         skip_model_load=True,
     )
 
-    # Inspect spec to find actual input/output feature names, including stateful ones.
-    spec = mlmodel_fp16.get_spec()
-    input_names = {f.name for f in spec.description.input}
-    output_names = {f.name for f in spec.description.output}
-
-    def _resolve_state_name(base: str) -> Tuple[str | None, str | None]:
-        """
-        KR: state 이름이 'keyCache', 'keyCache_in', 'keyCache_out' 등으로 붙었을 수 있으니
-            실제 input/output에 존재하는 이름을 찾아서 반환한다.
-        JP: state 名が 'keyCache', 'keyCache_in', 'keyCache_out' などになっている可能性があるため、
-            実際に存在する input/output 名を探索して返す。
-        EN: State features might be named 'keyCache', 'keyCache_in', or 'keyCache_out', etc.
-            This helper returns the first matching input and output names, if any.
-        """
-        candidates = (base, base + "_in", base + "_out")
-        in_name = None
-        out_name = None
-        for name in candidates:
-            if in_name is None and name in input_names:
-                in_name = name
-            if out_name is None and name in output_names:
-                out_name = name
-        return in_name, out_name
-
-    key_in_name, key_out_name = _resolve_state_name("keyCache")
-    val_in_name, val_out_name = _resolve_state_name("valueCache")
-
     # Set feature descriptions for stateful model
     mlmodel_fp16.input_description["input_ids"] = (
         "Input token IDs for the stateful zenz-v1 language model."
@@ -418,29 +338,6 @@ def convert_model(model_name: str, output_path: str) -> None:
         "Unnormalized next-token logits for each vocabulary token, taking into account the current KV cache state."
         "Shape: [batch, query_length, vocab_size]."
     )
-
-    # State tensors description (KV cache)
-    if key_in_name is not None:
-        mlmodel_fp16.input_description[key_in_name] = (
-            "State tensor storing past key values for all transformer layers."
-            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
-        )
-    if key_out_name is not None:
-        mlmodel_fp16.output_description[key_out_name] = (
-            "State tensor storing past key values for all transformer layers."
-            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
-        )
-
-    if val_in_name is not None:
-        mlmodel_fp16.input_description[val_in_name] = (
-            "State tensor storing past value values for all transformer layers."
-            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
-        )
-    if val_out_name is not None:
-        mlmodel_fp16.output_description[val_out_name] = (
-            "State tensor storing past value values for all transformer layers."
-            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
-        )
 
     # Author information: original + Core ML conversion
     mlmodel_fp16.author = (
