@@ -407,38 +407,38 @@ def convert_model(model_name: str, output_path: str) -> None:
 
     # Set feature descriptions for stateful model
     mlmodel_fp16.input_description["input_ids"] = (
-        "Input token IDs for the stateful zenz-v1 language model.\n"
+        "Input token IDs for the stateful zenz-v1 language model."
         "Shape: [batch, query_length] with Int32 values."
     )
     mlmodel_fp16.input_description["attention_mask"] = (
-        "Attention mask for the input tokens. 1 for valid tokens, 0 for padding.\n"
+        "Attention mask for the input tokens. 1 for valid tokens, 0 for padding."
         "Shape: [batch, query_length] with Int32 values."
     )
     mlmodel_fp16.output_description["logits"] = (
-        "Unnormalized next-token logits for each vocabulary token, taking into account the current KV cache state.\n"
+        "Unnormalized next-token logits for each vocabulary token, taking into account the current KV cache state."
         "Shape: [batch, query_length, vocab_size]."
     )
 
     # State tensors description (KV cache)
     if key_in_name is not None:
         mlmodel_fp16.input_description[key_in_name] = (
-            "State tensor storing past key values for all transformer layers.\n"
+            "State tensor storing past key values for all transformer layers."
             "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
         )
     if key_out_name is not None:
         mlmodel_fp16.output_description[key_out_name] = (
-            "State tensor storing past key values for all transformer layers.\n"
+            "State tensor storing past key values for all transformer layers."
             "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
         )
 
     if val_in_name is not None:
         mlmodel_fp16.input_description[val_in_name] = (
-            "State tensor storing past value values for all transformer layers.\n"
+            "State tensor storing past value values for all transformer layers."
             "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
         )
     if val_out_name is not None:
         mlmodel_fp16.output_description[val_out_name] = (
-            "State tensor storing past value values for all transformer layers.\n"
+            "State tensor storing past value values for all transformer layers."
             "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
         )
 

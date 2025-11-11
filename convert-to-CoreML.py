@@ -52,11 +52,11 @@ mlmodel = ct.convert(
 
 # Set feature descriptions (these show up as comments in Xcode)
 mlmodel.input_description["input_ids"] = (
-    "Input token IDs for the zenz-v1 language model.\n"
+    "Input token IDs for the zenz-v1 language model."
     "Shape: [batch, sequence_length] with Int32 values."
 )
 mlmodel.output_description["logits"] = (
-    "Unnormalized next-token logits for each vocabulary token.\n"
+    "Unnormalized next-token logits for each vocabulary token."
     "Shape: [batch, sequence_length, vocab_size]."
 )
 
