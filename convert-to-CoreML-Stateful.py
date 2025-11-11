@@ -374,7 +374,7 @@ def convert_model(model_name: str, output_path: str) -> None:
         states=states,
         source="pytorch",
         minimum_deployment_target=ct.target.iOS18,
-        compute_units=ct.ComputeUnit.ALL,
+        compute_units=ct.ComputeUnit.CPU_AND_GPU,
         skip_model_load=True,
     )
 
