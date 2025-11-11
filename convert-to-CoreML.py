@@ -11,7 +11,7 @@ from transformers.models.gpt2 import modeling_gpt2 as gpt2_mod
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 MODEL_NAME = "Miwa-Keita/zenz-v1-checkpoints"
-MAX_CONTEXT_SIZE = 256
+MAX_CONTEXT_SIZE = 128
 BATCH_SIZE = 1
 
 

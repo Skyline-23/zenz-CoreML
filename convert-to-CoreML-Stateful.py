@@ -95,10 +95,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # JP: 変換に使用する Hugging Face モデル名と、Core ML で使う最大コンテキスト長 / バッチサイズの設定。
 # EN: Name of the Hugging Face model to convert, and max context length / batch size for the Core ML export.
 MODEL_NAME = "Miwa-Keita/zenz-v1-checkpoints"
-MAX_CONTEXT_SIZE = 256
+MAX_CONTEXT_SIZE = 128
 BATCH_SIZE = 1
-
-
 
 
 class StatefulGPT2ForCausalLM(torch.nn.Module):
@@ -214,6 +212,11 @@ class StatefulGPT2ForCausalLM(torch.nn.Module):
         )
 
         logits = outputs.logits
+        # KR: 전체 시퀀스 로그릿에서 마지막 시점만 남김 → [B, T, V] → [B, 1, V]
+        # JP: 全タイムステップの logits から最後のステップのみを残す → [B, T, V] → [B, 1, V]
+        # EN: Keep only the last time step logits → [B, T, V] → [B, 1, V]
+        logits = logits[:, -1:, :]
+
         present_key_values = outputs.past_key_values
 
         # KR: 새로 계산된 KV를 잘라서(max_context_size 기준) 내부 state 버퍼에 다시 저장한다.
@@ -235,6 +238,107 @@ class StatefulGPT2ForCausalLM(torch.nn.Module):
         return logits
 
 
+def debug_compare_stateful_vs_stateless():
+    """
+    KR: Stateful 래퍼(StatefulGPT2ForCausalLM)가 Hugging Face의 기본 GPT2LMHeadModel과
+        동일한 토큰 시퀀스를 생성하는지 검증하기 위한 디버그 함수입니다.
+    JP: Stateful ラッパー(StatefulGPT2ForCausalLM) が Hugging Face の標準 GPT2LMHeadModel と
+        同じトークン列を生成するかどうか検証するためのデバッグ用関数です。
+    EN: Debug helper to verify that the StatefulGPT2ForCausalLM wrapper produces the same
+        token sequence as the original GPT2LMHeadModel from Hugging Face.
+    """
+    device = torch.device("cpu")
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    base_model = GPT2LMHeadModel.from_pretrained(MODEL_NAME).to(device).eval()
+
+    # ✅ Match attention implementation with the stateful wrapper: force "eager" if available
+    cfg2 = base_model.config
+    if hasattr(cfg2, "attn_implementation"):
+        cfg2.attn_implementation = "eager"
+    elif hasattr(cfg2, "_attn_implementation"):
+        cfg2._attn_implementation = "eager"
+
+    stateful = StatefulGPT2ForCausalLM(
+        model_name=MODEL_NAME,
+        max_context_size=MAX_CONTEXT_SIZE,
+        batch_size=1,
+    ).to(device).eval()
+
+    def greedy_stateless(prompt_ids: torch.Tensor, max_new_tokens: int = 16) -> torch.Tensor:
+        # prompt_ids: [1, T]
+        ids = prompt_ids.clone()
+        # Use an all-ones attention mask, since we do not pad in this debug routine.
+        attn = torch.ones_like(ids, device=device)
+
+        for _ in range(max_new_tokens):
+            with torch.no_grad():
+                out = base_model(input_ids=ids, attention_mask=attn)
+            logits = out.logits[:, -1, :]  # [1, vocab]
+            next_id = int(torch.argmax(logits, dim=-1))
+            ids = torch.cat(
+                [ids, torch.tensor([[next_id]], dtype=ids.dtype, device=ids.device)],
+                dim=1,
+            )
+            # Rebuild attention mask for the extended sequence (still all ones).
+            attn = torch.ones_like(ids, device=device)
+
+        return ids
+
+    def greedy_stateful(prompt_ids: torch.Tensor, max_new_tokens: int = 16) -> torch.Tensor:
+        # state 초기화
+        stateful.keyCache.zero_()
+        stateful.valueCache.zero_()
+        stateful.pastLen.zero_()
+
+        attn = torch.ones_like(prompt_ids, device=device)
+        ids = prompt_ids.clone()
+
+        with torch.no_grad():
+            # (1) 프롬프트 전체를 한 번 넣어서 KV 캐시 초기화
+            logits = stateful(input_ids=ids, attention_mask=attn)  # [1, 1, vocab]
+            next_id = int(torch.argmax(logits[:, -1, :], dim=-1))
+            ids = torch.cat(
+                [ids, torch.tensor([[next_id]], dtype=ids.dtype, device=ids.device)],
+                dim=1,
+            )
+
+            # (2) 이후에는 마지막 토큰만 [1,1]로 넣으면서 한 토큰씩 생성
+            for _ in range(max_new_tokens - 1):
+                last = ids[:, -1:]
+                attn_step = torch.ones_like(last, device=device)
+                logits = stateful(input_ids=last, attention_mask=attn_step)  # [1, 1, vocab]
+                next_id = int(torch.argmax(logits[:, -1, :], dim=-1))
+                ids = torch.cat(
+                    [ids, torch.tensor([[next_id]], dtype=ids.dtype, device=ids.device)],
+                    dim=1,
+                )
+        return ids
+
+    test_texts = [
+        "ニホンゴ",
+        "カンコクゴヲベンキョウスル",
+        "オハヨウゴザイマス",
+    ]
+
+    for text in test_texts:
+        print("=" * 80)
+        print("TEXT:", text)
+        enc = tokenizer.encode(text, return_tensors="pt").to(device)
+
+        ids_stateless = greedy_stateless(enc)
+        ids_stateful = greedy_stateful(enc)
+
+        dec_stateless = tokenizer.decode(ids_stateless[0], skip_special_tokens=True)
+        dec_stateful = tokenizer.decode(ids_stateful[0], skip_special_tokens=True)
+
+        print("[Stateless] decoded:", dec_stateless)
+        print("[Stateful ] decoded:", dec_stateful)
+        print("Same token ids?:", torch.equal(ids_stateless, ids_stateful))
+        print("Stateless ids:", ids_stateless.tolist())
+        print("Stateful  ids:", ids_stateful.tolist())
+        print("=" * 80)
+
 def convert_model(model_name: str, output_path: str) -> None:
     # 토크나이저는 그대로
     tokenizer = AutoTokenizer.from_pretrained(model_name)
@@ -247,6 +351,7 @@ def convert_model(model_name: str, output_path: str) -> None:
     ).eval()
 
     kv_cache_shape = torch_model.kv_cache_shape
+    vocab_size = torch_model.model.config.vocab_size
 
     # trace용 예제 입력 (길이는 아무거나, 상한은 MAX_CONTEXT_SIZE)
     example_input_ids = torch.zeros((BATCH_SIZE, 4), dtype=torch.long)
@@ -279,7 +384,10 @@ def convert_model(model_name: str, output_path: str) -> None:
     ]
 
     outputs: List[ct.TensorType] = [
-        ct.TensorType(dtype=np.float16, name="logits"),
+        ct.TensorType(
+            dtype=np.float16,
+            name="logits",
+        ),
     ]
 
     # Define anonymous TensorTypes for state tensors, use in ct.StateType
@@ -363,4 +471,8 @@ def convert_model(model_name: str, output_path: str) -> None:
     mlmodel_fp16.save(output_path)
 
 if __name__ == "__main__":
+    # Step 1: 디버그 모드 - stateful vs stateless 비교
+    # debug_compare_stateful_vs_stateless()
+
+    # 이후 Core ML 변환을 다시 돌리고 싶으면 아래 주석을 풀어서 사용하세요.
     convert_model(MODEL_NAME, "zenz_v1_stateful.mlpackage")
