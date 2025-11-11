@@ -44,11 +44,44 @@ mlmodel = ct.convert(
             shape=(1, ct.RangeDim(1, 256)),  # 시퀀스 길이 상한 256 / Max sequence length 256 / 上限を256に設定
         ),
     ],
+    outputs=[
+        ct.TensorType(name="logits"),
+    ],
     minimum_deployment_target=ct.target.iOS15,
 )
 
+# Set feature descriptions (these show up as comments in Xcode)
+mlmodel.input_description["input_ids"] = (
+    "Input token IDs for the zenz-v1 language model.\n"
+    "Shape: [batch, sequence_length] with Int32 values."
+)
+mlmodel.output_description["logits"] = (
+    "Unnormalized next-token logits for each vocabulary token.\n"
+    "Shape: [batch, sequence_length, vocab_size]."
+)
+
+# Set model author name (original + Core ML conversion)
+mlmodel.author = (
+    "Original model: Miwa-Keita\n"
+    "Stateful Core ML conversion: Skyline-23 (Buseong Kim)"
+)
+
+# Set the license of the model
+mlmodel.license = (
+    "CC-BY-SA 4.0"
+)
+
+# Set a short description for the Xcode UI
+mlmodel.short_description = (
+    "zenz-v1 GPT-2–style causal language model converted to Core ML.\n"
+    "Given input token IDs, it produces next-token logits for text generation on Apple devices."
+)
+
+# Set the preview type (custom text-oriented tag)
+mlmodel.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"
+
+# Set a version for the model
+mlmodel.version = "1.0.0"
+
 # 변환된 모델 저장 / Save the converted model
 mlmodel.save("zenz_v1.mlpackage")
-
-print("모델이 성공적으로 변환되고 저장되었습니다: zenz_v1.mlpackage / Model successfully converted and saved as: zenz_v1.mlpackage")
-print("토크나이저가 tokenizer/ 폴더에 저장되었습니다 / Tokenizer successfully saved into tokenizer/ directory")

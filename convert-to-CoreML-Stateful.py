@@ -378,13 +378,92 @@ def convert_model(model_name: str, output_path: str) -> None:
         skip_model_load=True,
     )
 
+    # Inspect spec to find actual input/output feature names, including stateful ones.
+    spec = mlmodel_fp16.get_spec()
+    input_names = {f.name for f in spec.description.input}
+    output_names = {f.name for f in spec.description.output}
+
+    def _resolve_state_name(base: str) -> Tuple[str | None, str | None]:
+        """
+        KR: state 이름이 'keyCache', 'keyCache_in', 'keyCache_out' 등으로 붙었을 수 있으니
+            실제 input/output에 존재하는 이름을 찾아서 반환한다.
+        JP: state 名が 'keyCache', 'keyCache_in', 'keyCache_out' などになっている可能性があるため、
+            実際に存在する input/output 名を探索して返す。
+        EN: State features might be named 'keyCache', 'keyCache_in', or 'keyCache_out', etc.
+            This helper returns the first matching input and output names, if any.
+        """
+        candidates = (base, base + "_in", base + "_out")
+        in_name = None
+        out_name = None
+        for name in candidates:
+            if in_name is None and name in input_names:
+                in_name = name
+            if out_name is None and name in output_names:
+                out_name = name
+        return in_name, out_name
+
+    key_in_name, key_out_name = _resolve_state_name("keyCache")
+    val_in_name, val_out_name = _resolve_state_name("valueCache")
+
+    # Set feature descriptions for stateful model
+    mlmodel_fp16.input_description["input_ids"] = (
+        "Input token IDs for the stateful zenz-v1 language model.\n"
+        "Shape: [batch, query_length] with Int32 values."
+    )
+    mlmodel_fp16.input_description["attention_mask"] = (
+        "Attention mask for the input tokens. 1 for valid tokens, 0 for padding.\n"
+        "Shape: [batch, query_length] with Int32 values."
+    )
+    mlmodel_fp16.output_description["logits"] = (
+        "Unnormalized next-token logits for each vocabulary token, taking into account the current KV cache state.\n"
+        "Shape: [batch, query_length, vocab_size]."
+    )
+
+    # State tensors description (KV cache)
+    if key_in_name is not None:
+        mlmodel_fp16.input_description[key_in_name] = (
+            "State tensor storing past key values for all transformer layers.\n"
+            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
+        )
+    if key_out_name is not None:
+        mlmodel_fp16.output_description[key_out_name] = (
+            "State tensor storing past key values for all transformer layers.\n"
+            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
+        )
+
+    if val_in_name is not None:
+        mlmodel_fp16.input_description[val_in_name] = (
+            "State tensor storing past value values for all transformer layers.\n"
+            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
+        )
+    if val_out_name is not None:
+        mlmodel_fp16.output_description[val_out_name] = (
+            "State tensor storing past value values for all transformer layers.\n"
+            "Shape: [num_layers, batch, num_heads, max_context_size, head_dim] in fp16."
+        )
+
+    # Author information: original + Core ML conversion
+    mlmodel_fp16.author = (
+        "Original model: Miwa-Keita\n"
+        "Stateful Core ML conversion: Skyline-23 (Buseong Kim)"
+    )
+
+    # License information
+    mlmodel_fp16.license = (
+        "CC-BY-SA 4.0"
+    )
+
+    # Short description for Xcode
+    mlmodel_fp16.short_description = (
+        "Stateful Core ML variant of the zenz-v1 GPT-2–style language model.\n"
+        "Maintains key/value attention cache (keyCache/valueCache) to enable efficient incremental text generation."
+    )
+
+    # Preview type and version
+    mlmodel_fp16.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"
+    mlmodel_fp16.version = "1.0.0-stateful"
 
     mlmodel_fp16.save(output_path)
-
-    print(f"Stateful GPT-2 Core ML model saved as: {output_path}")
-    print(f"  - max context: {MAX_CONTEXT_SIZE}")
-    print(f"  - kv_cache shape: {kv_cache_shape}")
-
 
 if __name__ == "__main__":
     convert_model(MODEL_NAME, "zenz_v1_stateful.mlpackage")
