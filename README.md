@@ -1,10 +1,8 @@
 # zenz-CoreML
-python 3.11 
+python 3.13
 
-coremltools-8.0b2
+coremltools-9.0
 
-torch-2.3.0
+torch-2.7.0
 
-torchvision-0.18.0
-
-transformers-4.41.0
+transformers-4.57.1

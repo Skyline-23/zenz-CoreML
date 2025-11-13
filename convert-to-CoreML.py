@@ -2,6 +2,8 @@ import os
 from typing import List
 
 import coremltools as ct
+from coremltools.models import MLModel
+from coremltools.optimize.coreml import OpPalettizerConfig, OptimizationConfig, palettize_weights
 import numpy as np
 import torch
 from transformers import GPT2LMHeadModel, AutoTokenizer
@@ -180,7 +182,7 @@ def convert_model(output_path: str) -> None:
         inputs=inputs,
         outputs=outputs,
         source="pytorch",
-        minimum_deployment_target=ct.target.iOS16,
+        minimum_deployment_target=ct.target.iOS18,
         compute_units=ct.ComputeUnit.ALL,
         skip_model_load=True,
     )
@@ -213,6 +215,15 @@ def convert_model(output_path: str) -> None:
     mlmodel_fp16.version = "1.0.0"
 
     mlmodel_fp16.save(output_path)
+
+    op_config = OpPalettizerConfig(nbits=8)
+    opt_config = OptimizationConfig(global_config=op_config)
+    compressed = palettize_weights(
+        mlmodel_fp16,
+        opt_config
+    )
+    compressed_path = output_path.replace(".mlpackage", "-8bit.mlpackage")
+    compressed.save(compressed_path)
 
 
 if __name__ == "__main__":

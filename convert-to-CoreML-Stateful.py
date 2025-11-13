@@ -2,6 +2,8 @@ import os
 from typing import List, Tuple
 
 import coremltools as ct
+from coremltools.models import MLModel
+from coremltools.optimize.coreml import OpPalettizerConfig, OptimizationConfig, palettize_weights
 import numpy as np
 import torch
 from transformers import AutoTokenizer, GPT2LMHeadModel
@@ -459,7 +461,20 @@ def convert_model(model_name: str, output_path: str) -> None:
     mlmodel_fp16.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"
     mlmodel_fp16.version = "1.0.0-stateful"
 
+    # Save the base FP16 stateful model
     mlmodel_fp16.save(output_path)
+
+    # iOS 18용 8bit 팔레타이제이션 압축
+    # iOS 18 向けの 8bit パレット化圧縮
+    # 8-bit palettization compression for iOS 18
+    op_config = OpPalettizerConfig(nbits=8)
+    opt_config = OptimizationConfig(global_config=op_config)
+    compressed = palettize_weights(
+        mlmodel_fp16,
+        opt_config,
+    )
+    compressed_path = output_path.replace(".mlpackage", "-8bit.mlpackage")
+    compressed.save(compressed_path)
 
 if __name__ == "__main__":
     # Step 1: 디버그 모드 - stateful vs stateless 비교。
