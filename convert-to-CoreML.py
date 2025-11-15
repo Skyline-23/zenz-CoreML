@@ -191,7 +191,7 @@ def convert_model(output_path: str) -> None:
     # Xcode で表示される説明文。
     # Descriptions shown in Xcode.
     mlmodel_fp16.input_description["input_ids"] = (
-        "Input token IDs for the zenz-v1 language model."
+        "Input token IDs for the zenz-v3.1 language model."
         "Shape: [batch, sequence_length] with Int32 values."
     )
     mlmodel_fp16.output_description["logits"] = (
@@ -208,7 +208,7 @@ def convert_model(output_path: str) -> None:
     )
     mlmodel_fp16.license = "CC-BY-SA 4.0"
     mlmodel_fp16.short_description = (
-        "zenz-v1 GPT-2–style causal language model converted to Core ML.\n"
+        "zenz-v3.1 GPT-2–style causal language model converted to Core ML.\n"
         "Given input token IDs, it produces next-token logits for text generation on Apple devices."
     )
     mlmodel_fp16.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"

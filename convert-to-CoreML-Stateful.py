@@ -428,7 +428,7 @@ def convert_model(model_name: str, output_path: str) -> None:
 
     # Set feature descriptions for stateful model
     mlmodel_fp16.input_description["input_ids"] = (
-        "Input token IDs for the stateful zenz-v1 language model."
+        "Input token IDs for the stateful zenz-3.1 language model."
         "Shape: [batch, query_length] with Int32 values."
     )
     mlmodel_fp16.input_description["attention_mask"] = (
@@ -453,7 +453,7 @@ def convert_model(model_name: str, output_path: str) -> None:
 
     # Short description for Xcode
     mlmodel_fp16.short_description = (
-        "Stateful Core ML variant of the zenz-v1 GPT-2–style language model.\n"
+        "Stateful Core ML variant of the zenz-v3.1 GPT-2–style language model.\n"
         "Maintains key/value attention cache (keyCache/valueCache) to enable efficient incremental text generation."
     )
 
