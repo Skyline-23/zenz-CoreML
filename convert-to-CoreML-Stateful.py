@@ -98,7 +98,7 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
  # 변환에 사용할 Hugging Face 모델 이름과, Core ML에서 사용할 최대 컨텍스트 길이 / 배치 크기 설정。
  # 変換に使用する Hugging Face モデル名と、Core ML で使う最大コンテキスト長 / バッチサイズの設定。
  # Name of the Hugging Face model to convert, and max context length / batch size for the Core ML export.
-MODEL_NAME = "Miwa-Keita/zenz-v1-checkpoints"
+MODEL_NAME = "Miwa-Keita/zenz-v3.1-small"
 MAX_CONTEXT_SIZE = 128
 BATCH_SIZE = 1
 
@@ -459,7 +459,7 @@ def convert_model(model_name: str, output_path: str) -> None:
 
     # Preview type and version
     mlmodel_fp16.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"
-    mlmodel_fp16.version = "1.0.0-stateful"
+    mlmodel_fp16.version = "3.1.0-stateful"
 
     # Save the base FP16 stateful model
     mlmodel_fp16.save(output_path)
@@ -485,4 +485,4 @@ if __name__ == "__main__":
     # 이후 Core ML 변환을 다시 돌리고 싶으면 아래 주석을 풀어서 사용하세요。
     # Core ML 変換を再実行したい場合は、以下のコメントを外して使ってください。
     # If you want to rerun Core ML conversion, uncomment and use the line below.
-    convert_model(MODEL_NAME, "zenz_v1_stateful.mlpackage")
+    convert_model(MODEL_NAME, "zenz_v3.1_stateful.mlpackage")

@@ -14,7 +14,7 @@ from transformers.models.gpt2 import modeling_gpt2 as gpt2_mod
 # Disable tokenizer parallelism warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-MODEL_NAME = "Miwa-Keita/zenz-v1-checkpoints"
+MODEL_NAME = "Miwa-Keita/zenz-v3.1-small"
 MAX_CONTEXT_SIZE = 128
 BATCH_SIZE = 1
 
@@ -212,7 +212,7 @@ def convert_model(output_path: str) -> None:
         "Given input token IDs, it produces next-token logits for text generation on Apple devices."
     )
     mlmodel_fp16.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"
-    mlmodel_fp16.version = "1.0.0"
+    mlmodel_fp16.version = "3.1.0"
 
     mlmodel_fp16.save(output_path)
 
@@ -227,4 +227,4 @@ def convert_model(output_path: str) -> None:
 
 
 if __name__ == "__main__":
-    convert_model("zenz_v1.mlpackage")
+    convert_model("zenz_v3.1.mlpackage")
