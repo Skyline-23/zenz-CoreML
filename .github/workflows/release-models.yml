@@ -1,0 +1,47 @@
+name: Release CoreML models
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with LFS
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Install Git LFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+          git lfs install
+          git lfs pull
+
+      - name: Zip .mlpackage bundles
+        run: |
+          mkdir -p dist
+          for dir in zenz-CoreML/Stateless/*.mlpackage zenz-CoreML/Stateful/*.mlpackage; do
+            [ -d "$dir" ] || continue
+            name=$(basename "$dir")
+            zip -r "dist/${name}.zip" "$dir"
+          done
+
+      - name: Create GitHub Release & upload assets
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Zenz CoreML ${{
+            github.ref_name
+          }}"
+          draft: false
+          prerelease: false
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
