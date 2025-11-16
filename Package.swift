@@ -29,22 +29,22 @@
           .binaryTarget(
               name: "ZenzCoreMLStateless",
               url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateless.xcframework.zip",
-              checksum: "6706583a40fb46b1b5324861fc14496286f453bd163db6f0d0470775bca6bff7"
+              checksum: "c94960b1b1fb0529e4ffaa2a90defb8d5076a0f61d5ea207b07d8788326f1bdf"
           ),
           .binaryTarget(
               name: "ZenzCoreMLStateless8bit",
               url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateless8bit.xcframework.zip",
-              checksum: "9ccfab5ec41b5dae2813d0f897654c41416e31e8167d3c79e21e85822679aa96"
+              checksum: "d2ff4097fe1aa371ced80d0a54cee33729f7404791203c3aa6584ee7e8953e6d"
           ),
           .binaryTarget(
               name: "ZenzCoreMLStateful",
               url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateful.xcframework.zip",
-              checksum: "c101db04ba873f121cf2e36053b7766f998f892afc97c14858f9b3778e0e7919"
+              checksum: "0d4fcf1a29ec0d09a1e1adbdc6f587bb889275371c29076ade30053a8a1be5a0"
           ),
           .binaryTarget(
               name: "ZenzCoreMLStateful8bit",
               url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateful8bit.xcframework.zip",
-              checksum: "58240fa965678bed92d9acb9278880a8971358ff5dfe04b739a2629229a4507b"
+              checksum: "7e36c19ee66be16042361f0feebe7dd227a85097c7672a08570c5dd76988d546"
           )
       ]
   )
