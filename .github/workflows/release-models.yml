@@ -76,7 +76,7 @@ jobs:
       - name: Generate Package.swift from artifacts
         env:
           VERSION: ${{ github.event.inputs.version }}
-          REPO_SLUG: skyline23/zenz-CoreML
+          REPO_SLUG: Skyline-23/zenz-CoreML
         run: |
           set -euo pipefail
 
@@ -95,57 +95,57 @@ jobs:
           CS_STATEFUL_8=$(checksum "ZenzCoreMLStateful8bit")
 
           cat > Package.swift <<EOF
-          // swift-tools-version: 5.9
-          import PackageDescription
+// swift-tools-version: 6.1
+import PackageDescription
 
-          let package = Package(
-              name: "ZenzCoreMLPackage",
-              platforms: [
-                  .iOS(.v15),
-                  .macOS(.v14)
-              ],
-              products: [
-                  .library(
-                      name: "ZenzCoreMLStateless",
-                      targets: ["ZenzCoreMLStateless"]
-                  ),
-                  .library(
-                      name: "ZenzCoreMLStateless8bit",
-                      targets: ["ZenzCoreMLStateless8bit"]
-                  ),
-                  .library(
-                      name: "ZenzCoreMLStateful",
-                      targets: ["ZenzCoreMLStateful"]
-                  ),
-                  .library(
-                      name: "ZenzCoreMLStateful8bit",
-                      targets: ["ZenzCoreMLStateful8bit"]
-                  )
-              ],
-              targets: [
-                  .binaryTarget(
-                      name: "ZenzCoreMLStateless",
-                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateless.xcframework.zip",
-                      checksum: "\(CS_STATELESS)"
-                  ),
-                  .binaryTarget(
-                      name: "ZenzCoreMLStateless8bit",
-                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateless8bit.xcframework.zip",
-                      checksum: "\(CS_STATELESS_8)"
-                  ),
-                  .binaryTarget(
-                      name: "ZenzCoreMLStateful",
-                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateful.xcframework.zip",
-                      checksum: "\(CS_STATEFUL)"
-                  ),
-                  .binaryTarget(
-                      name: "ZenzCoreMLStateful8bit",
-                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateful8bit.xcframework.zip",
-                      checksum: "\(CS_STATEFUL_8)"
-                  )
-              ]
-          )
-          EOF
+let package = Package(
+    name: "ZenzCoreMLPackage",
+    platforms: [
+        .iOS(.v18),
+        .macOS(.v15)
+    ],
+    products: [
+        .library(
+            name: "ZenzCoreMLStateless",
+            targets: ["ZenzCoreMLStateless"]
+        ),
+        .library(
+            name: "ZenzCoreMLStateless8bit",
+            targets: ["ZenzCoreMLStateless8bit"]
+        ),
+        .library(
+            name: "ZenzCoreMLStateful",
+            targets: ["ZenzCoreMLStateful"]
+        ),
+        .library(
+            name: "ZenzCoreMLStateful8bit",
+            targets: ["ZenzCoreMLStateful8bit"]
+        )
+    ],
+    targets: [
+        .binaryTarget(
+            name: "ZenzCoreMLStateless",
+            url: "https://github.com/${REPO_SLUG}/releases/download/${TAG}/ZenzCoreMLStateless.xcframework.zip",
+            checksum: "${CS_STATELESS}"
+        ),
+        .binaryTarget(
+            name: "ZenzCoreMLStateless8bit",
+            url: "https://github.com/${REPO_SLUG}/releases/download/${TAG}/ZenzCoreMLStateless8bit.xcframework.zip",
+            checksum: "${CS_STATELESS_8}"
+        ),
+        .binaryTarget(
+            name: "ZenzCoreMLStateful",
+            url: "https://github.com/${REPO_SLUG}/releases/download/${TAG}/ZenzCoreMLStateful.xcframework.zip",
+            checksum: "${CS_STATEFUL}"
+        ),
+        .binaryTarget(
+            name: "ZenzCoreMLStateful8bit",
+            url: "https://github.com/${REPO_SLUG}/releases/download/${TAG}/ZenzCoreMLStateful8bit.xcframework.zip",
+            checksum: "${CS_STATEFUL_8}"
+        )
+    ]
+)
+EOF
 
           echo "=== Generated Package.swift ==="
           cat Package.swift
