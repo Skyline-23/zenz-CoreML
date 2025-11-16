@@ -1,10 +1,11 @@
-name: Release CoreML models
+name: Release Zenz CoreML
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version"
+        required: true
 
 permissions:
   contents: write
@@ -14,10 +15,24 @@ jobs:
     runs-on: macos-latest
 
     steps:
+      - name: Validate version input format
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          echo "Requested version: $VERSION"
+
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "❌ Invalid version: '$VERSION'"
+            echo "   Use semantic version format: X.Y.Z (e.g. 3.1.0)"
+            exit 1
+          fi
+
+          echo "✅ Version format OK"
+
       - name: Checkout with LFS
         uses: actions/checkout@v4
         with:
           lfs: true
+          fetch-depth: 0
 
       - name: Install Git LFS
         run: |
@@ -58,15 +73,112 @@ jobs:
           echo "=== BuildArtifacts contents ==="
           ls -R BuildArtifacts || echo "BuildArtifacts is empty"
 
+      - name: Generate Package.swift from artifacts
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          REPO_SLUG: skyline23/zenz-CoreML
+        run: |
+          set -euo pipefail
+
+          TAG="v${VERSION}"
+
+          echo "Version: ${VERSION}, Tag: ${TAG}"
+
+          checksum() {
+            local name="$1" # e.g. ZenzCoreMLStateful8bit
+            swift package compute-checksum "BuildArtifacts/${name}.xcframework.zip"
+          }
+
+          CS_STATELESS=$(checksum "ZenzCoreMLStateless")
+          CS_STATELESS_8=$(checksum "ZenzCoreMLStateless8bit")
+          CS_STATEFUL=$(checksum "ZenzCoreMLStateful")
+          CS_STATEFUL_8=$(checksum "ZenzCoreMLStateful8bit")
+
+          cat > Package.swift <<EOF
+          // swift-tools-version: 5.9
+          import PackageDescription
+
+          let package = Package(
+              name: "ZenzCoreMLPackage",
+              platforms: [
+                  .iOS(.v15),
+                  .macOS(.v14)
+              ],
+              products: [
+                  .library(
+                      name: "ZenzCoreMLStateless",
+                      targets: ["ZenzCoreMLStateless"]
+                  ),
+                  .library(
+                      name: "ZenzCoreMLStateless8bit",
+                      targets: ["ZenzCoreMLStateless8bit"]
+                  ),
+                  .library(
+                      name: "ZenzCoreMLStateful",
+                      targets: ["ZenzCoreMLStateful"]
+                  ),
+                  .library(
+                      name: "ZenzCoreMLStateful8bit",
+                      targets: ["ZenzCoreMLStateful8bit"]
+                  )
+              ],
+              targets: [
+                  .binaryTarget(
+                      name: "ZenzCoreMLStateless",
+                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateless.xcframework.zip",
+                      checksum: "\(CS_STATELESS)"
+                  ),
+                  .binaryTarget(
+                      name: "ZenzCoreMLStateless8bit",
+                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateless8bit.xcframework.zip",
+                      checksum: "\(CS_STATELESS_8)"
+                  ),
+                  .binaryTarget(
+                      name: "ZenzCoreMLStateful",
+                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateful.xcframework.zip",
+                      checksum: "\(CS_STATEFUL)"
+                  ),
+                  .binaryTarget(
+                      name: "ZenzCoreMLStateful8bit",
+                      url: "https://github.com/\(REPO_SLUG)/releases/download/\(TAG)/ZenzCoreMLStateful8bit.xcframework.zip",
+                      checksum: "\(CS_STATEFUL_8)"
+                  )
+              ]
+          )
+          EOF
+
+          echo "=== Generated Package.swift ==="
+          cat Package.swift
+
+      - name: Commit & tag updated Package.swift
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+
+          TAG="v${VERSION}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add Package.swift
+          git commit -m "Release ${TAG} [skip ci]" || echo "No changes to commit"
+
+          git push origin HEAD:main
+
+          git tag "${TAG}"
+          git push origin "${TAG}"
+
       - name: Create GitHub Release & upload assets
         uses: softprops/action-gh-release@v1
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ github.ref_name }}
-          name: "Zenz CoreML ${{ github.ref_name }}"
+          tag_name: v${{ github.event.inputs.version }}
+          name: "Zenz CoreML v${{ github.event.inputs.version }}"
           draft: false
           prerelease: false
           files: |
             dist/*
             BuildArtifacts/*.xcframework.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
