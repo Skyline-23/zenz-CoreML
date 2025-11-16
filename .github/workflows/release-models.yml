@@ -6,6 +6,9 @@ on:
       - "v*"
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -26,11 +29,16 @@ jobs:
       - name: Zip .mlpackage bundles
         run: |
           mkdir -p dist
-          for dir in zenz-CoreML/Stateless/*.mlpackage zenz-CoreML/Stateful/*.mlpackage; do
+          for dir in Stateless/*.mlpackage Stateful/*.mlpackage; do
             [ -d "$dir" ] || continue
             name=$(basename "$dir")
             zip -r "dist/${name}.zip" "$dir"
           done
+
+      - name: Debug dist contents
+        run: |
+          echo "=== dist contents ==="
+          ls -R dist || echo "dist is empty"
 
       - name: Create GitHub Release & upload assets
         uses: softprops/action-gh-release@v1
