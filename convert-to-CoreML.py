@@ -1,4 +1,6 @@
 import os
+import shutil
+from pathlib import Path
 from typing import List
 
 import coremltools as ct
@@ -134,12 +136,15 @@ class StatelessGPT2ForCausalLM(torch.nn.Module):
         return outputs.logits
 
 
-def convert_model(output_path: str) -> None:
+def convert_model(output_dir: Path, base_name: str) -> None:
     # 토크나이저 로드 + JSON 저장 (Swift에서 쓸 수 있도록)。
     # トークナイザーをロードして JSON で保存（Swift で利用できるように）。
     # Load and save the tokenizer as JSON (for use in Swift).
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     tokenizer.save_pretrained("./tokenizer/")
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{base_name}.mlpackage"
 
     # Torch 쪽 stateless 래퍼。
     # Torch 側の stateless ラッパー。
@@ -214,7 +219,9 @@ def convert_model(output_path: str) -> None:
     mlmodel_fp16.user_defined_metadata["com.apple.coreml.model.preview.type"] = "textGenerator"
     mlmodel_fp16.version = "3.1.0"
 
-    mlmodel_fp16.save(output_path)
+    if output_path.exists():
+        shutil.rmtree(output_path)
+    mlmodel_fp16.save(str(output_path))
 
     op_config = OpPalettizerConfig(nbits=8)
     opt_config = OptimizationConfig(global_config=op_config)
@@ -222,9 +229,11 @@ def convert_model(output_path: str) -> None:
         mlmodel_fp16,
         opt_config
     )
-    compressed_path = output_path.replace(".mlpackage", "-8bit.mlpackage")
-    compressed.save(compressed_path)
+    compressed_path = output_dir / f"{base_name}-8bit.mlpackage"
+    if compressed_path.exists():
+        shutil.rmtree(compressed_path)
+    compressed.save(str(compressed_path))
 
 
 if __name__ == "__main__":
-    convert_model("zenz_v3.1.mlpackage")
+    convert_model(Path("Stateless"), "ZenzCoreMLStateless")

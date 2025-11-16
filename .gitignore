@@ -2,6 +2,9 @@
 *.xcodeproj
 *.xcworkspace
 
+# CoreML
+*.mlpackage
+
 # Optionally keep the project.pbxproj if you want minimal project file in git
 # !*.xcodeproj/project.pbxproj
 # !*.xcodeproj/xcshareddata/

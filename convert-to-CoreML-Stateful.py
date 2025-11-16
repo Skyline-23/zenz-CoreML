@@ -1,4 +1,6 @@
 import os
+import shutil
+from pathlib import Path
 from typing import List, Tuple
 
 import coremltools as ct
@@ -320,7 +322,7 @@ def debug_compare_stateful_vs_stateless():
         print("Stateful  ids:", ids_stateful.tolist())
         print("=" * 80)
 
-def convert_model(model_name: str, output_path: str) -> None:
+def convert_model(model_name: str, output_dir: Path, base_name: str) -> None:
     # 토크나이저는 그대로。
     # トークナイザーはそのまま。
     # Tokenizer remains unchanged.
@@ -462,7 +464,11 @@ def convert_model(model_name: str, output_path: str) -> None:
     mlmodel_fp16.version = "3.1.0-stateful"
 
     # Save the base FP16 stateful model
-    mlmodel_fp16.save(output_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{base_name}.mlpackage"
+    if output_path.exists():
+        shutil.rmtree(output_path)
+    mlmodel_fp16.save(str(output_path))
 
     # iOS 18용 8bit 팔레타이제이션 압축
     # iOS 18 向けの 8bit パレット化圧縮
@@ -473,8 +479,10 @@ def convert_model(model_name: str, output_path: str) -> None:
         mlmodel_fp16,
         opt_config,
     )
-    compressed_path = output_path.replace(".mlpackage", "-8bit.mlpackage")
-    compressed.save(compressed_path)
+    compressed_path = output_dir / f"{base_name}-8bit.mlpackage"
+    if compressed_path.exists():
+        shutil.rmtree(compressed_path)
+    compressed.save(str(compressed_path))
 
 if __name__ == "__main__":
     # Step 1: 디버그 모드 - stateful vs stateless 비교。
@@ -485,4 +493,4 @@ if __name__ == "__main__":
     # 이후 Core ML 변환을 다시 돌리고 싶으면 아래 주석을 풀어서 사용하세요。
     # Core ML 変換を再実行したい場合は、以下のコメントを外して使ってください。
     # If you want to rerun Core ML conversion, uncomment and use the line below.
-    convert_model(MODEL_NAME, "zenz_v3.1_stateful.mlpackage")
+    convert_model(MODEL_NAME, Path("Stateful"), "ZenzCoreMLStateful")
