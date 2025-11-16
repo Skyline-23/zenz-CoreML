@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
 
     steps:
       - name: Checkout with LFS
@@ -21,10 +21,26 @@ jobs:
 
       - name: Install Git LFS
         run: |
-          sudo apt-get update
-          sudo apt-get install -y git-lfs
+          brew install git-lfs
           git lfs install
           git lfs pull
+
+      - name: Install Tuist
+        run: |
+          brew install tuist
+
+      - name: Tuist install dependencies
+        run: |
+          tuist install
+
+      - name: Generate Xcode project with Tuist
+        run: |
+          tuist generate --no-open
+
+      - name: Build xcframeworks
+        run: |
+          chmod +x Scripts/build_xcframeworks.sh
+          ./Scripts/build_xcframeworks.sh
 
       - name: Zip .mlpackage bundles
         run: |
@@ -35,21 +51,22 @@ jobs:
             zip -r "dist/${name}.zip" "$dir"
           done
 
-      - name: Debug dist contents
+      - name: Debug artifacts
         run: |
           echo "=== dist contents ==="
           ls -R dist || echo "dist is empty"
+          echo "=== BuildArtifacts contents ==="
+          ls -R BuildArtifacts || echo "BuildArtifacts is empty"
 
       - name: Create GitHub Release & upload assets
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.ref_name }}
-          name: "Zenz CoreML ${{
-            github.ref_name
-          }}"
+          name: "Zenz CoreML ${{ github.ref_name }}"
           draft: false
           prerelease: false
           files: |
             dist/*
+            BuildArtifacts/*.xcframework.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
