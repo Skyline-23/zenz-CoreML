@@ -4,8 +4,8 @@
   let package = Package(
       name: "ZenzCoreMLPackage",
       platforms: [
-          .iOS(.v18),
-          .macOS(.v15)
+          .iOS(.v16),
+          .macOS(.v13)
       ],
       products: [
           .library(
