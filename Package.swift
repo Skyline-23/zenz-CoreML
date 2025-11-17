@@ -28,23 +28,23 @@
       targets: [
           .binaryTarget(
               name: "ZenzCoreMLStateless",
-              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateless.xcframework.zip",
-              checksum: "c94960b1b1fb0529e4ffaa2a90defb8d5076a0f61d5ea207b07d8788326f1bdf"
+              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.1/ZenzCoreMLStateless.xcframework.zip",
+              checksum: "c3bb1f092e839fd02a4ad05e63363bff85e5715cd8b00195522f08e970bb52b1"
           ),
           .binaryTarget(
               name: "ZenzCoreMLStateless8bit",
-              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateless8bit.xcframework.zip",
-              checksum: "d2ff4097fe1aa371ced80d0a54cee33729f7404791203c3aa6584ee7e8953e6d"
+              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.1/ZenzCoreMLStateless8bit.xcframework.zip",
+              checksum: "0fa0ccacf436d94ac12b1260a07a52a2a627d7c95266030e1bb314ecdadace4c"
           ),
           .binaryTarget(
               name: "ZenzCoreMLStateful",
-              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateful.xcframework.zip",
-              checksum: "0d4fcf1a29ec0d09a1e1adbdc6f587bb889275371c29076ade30053a8a1be5a0"
+              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.1/ZenzCoreMLStateful.xcframework.zip",
+              checksum: "36d23f63e0e51dda2b5d20241a32b88dc8410f86f91c05c094d0d7554b8a1765"
           ),
           .binaryTarget(
               name: "ZenzCoreMLStateful8bit",
-              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.0/ZenzCoreMLStateful8bit.xcframework.zip",
-              checksum: "7e36c19ee66be16042361f0feebe7dd227a85097c7672a08570c5dd76988d546"
+              url: "https://github.com/Skyline-23/zenz-CoreML/releases/download/v3.1.1/ZenzCoreMLStateful8bit.xcframework.zip",
+              checksum: "0b70982ad90a07510deaaf8ae56ea4c4e7492082c0156c3cc572e406e56eb385"
           )
       ]
   )
